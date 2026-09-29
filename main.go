@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -13,7 +11,9 @@ import (
 
 	"github.com/nats-io/nats.go"
 
-	myNats "nae/infra/nats"
+	"nae/infra/cache"
+	"nae/infra/db"
+	myNats "nae/infra/mq"
 	"nae/internal/api"
 )
 
@@ -21,60 +21,80 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// 1. Initialize NATS JetStream Client
+	// 1. Connect Postgres
+	pgConn := os.Getenv("POSTGRES_URL")
+	if pgConn == "" {
+		pgConn = "postgres://apeman:ningning@localhost:5432/eventdb?sslmode=disable"
+	}
+	pgRepo, err := db.NewPostgresRepo(ctx, pgConn)
+	if err != nil {
+		log.Fatalf("Postgres connection failed: %v", err)
+	}
+	defer pgRepo.Pool.Close()
+
+	// 2. Connect Redis
+	redisURL := os.Getenv("REDIS_URL")
+	if redisURL == "" {
+		redisURL = "redis://localhost:6379/0"
+	}
+	redisCache, err := cache.NewRedisCache(redisURL)
+	if err != nil {
+		log.Fatalf("Redis connection failed: %v", err)
+	}
+
+	// 3. Connect NATS JetStream
 	natsURL := os.Getenv("NATS_URL")
 	if natsURL == "" {
 		natsURL = nats.DefaultURL
 	}
-
-	client, err := myNats.NewClient(natsURL)
+	natsClient, err := myNats.NewClient(natsURL)
 	if err != nil {
-		log.Fatalf("NATS Connection Error: %v", err)
+		log.Fatalf("NATS connection failed: %v", err)
 	}
-	defer client.Close()
+	defer natsClient.Close()
 
-	// 2. Provision Streams idempotently
-	_, err = client.EnsureStream(ctx, myNats.StreamConfig{
+	// Provision stream
+	_, err = natsClient.EnsureStream(ctx, myNats.StreamConfig{
 		Name:     "ORDERS",
 		Subjects: []string{"ORDERS.*"},
 	})
 	if err != nil {
-		log.Fatalf("Stream Setup Error: %v", err)
+		log.Fatalf("NATS Stream setup failed: %v", err)
 	}
 
-	// 3. Initialize Publisher & Router
-	publisher := myNats.NewPublisher(client.JS)
-	router := api.NewRouter(publisher)
+	// 4. Setup Routes
+	pub := myNats.NewPublisher(natsClient.JS)
+	orderHandler := api.NewOrderHandler(pgRepo, redisCache, pub)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/v1/orders", orderHandler.CreateOrder)
+	mux.HandleFunc("GET /api/v1/orders", orderHandler.GetOrder)
 
 	server := &http.Server{
 		Addr:         ":4000",
-		Handler:      router,
+		Handler:      mux,
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 10 * time.Second,
-		IdleTimeout:  15 * time.Second,
 	}
 
-	// 4. Start HTTP Server asynchronously
+	// 5. Run Server
 	go func() {
-		log.Printf("HTTP Server listening on port %s...", server.Addr)
-		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatalf("HTTP Server failed: %v", err)
+		log.Printf("Server listening on %s...", server.Addr)
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Server stopped: %v", err)
 		}
 	}()
 
-	// 5. Graceful Shutdown Signal Interceptor
-	stopSignal := make(chan os.Signal, 1)
-	signal.Notify(stopSignal, os.Interrupt, syscall.SIGTERM)
-	<-stopSignal
+	// Graceful Shutdown
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	<-stop
 
-	log.Println("Shutting down server gracefully...")
-
+	log.Println("Shutting down gracefully...")
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 
 	if err := server.Shutdown(shutdownCtx); err != nil {
-		log.Printf("HTTP Shutdown Error: %v", err)
+		log.Printf("HTTP shutdown error: %v", err)
 	}
-
-	fmt.Println("Server exited successfully.")
 }

@@ -5,16 +5,25 @@ import (
 	"net/http"
 	"time"
 
-	myNats "nae/infra/nats"
+	"nae/infra/cache"
+	"nae/infra/db"
+	myNats "nae/infra/mq"
 )
 
-func NewRouter(pub *myNats.Publisher) http.Handler {
+// NewRouter wires up the handlers, dependencies, and middleware
+func NewRouter(
+	pgRepo *db.PostgresRepo,
+	redisCache *cache.RedisCache,
+	pub *myNats.Publisher,
+) http.Handler {
 	mux := http.NewServeMux()
 
-	orderHandler := NewOrderHandler(pub)
+	// Initialize handler with all dependencies (DB, Cache, NATS Publisher)
+	orderHandler := NewOrderHandler(pgRepo, redisCache, pub)
 
-	// Routes
-	mux.HandleFunc("/api/v1/orders", orderHandler.CreateOrder)
+	// Routes (Go 1.22+ syntax matching HTTP methods)
+	mux.HandleFunc("POST /api/v1/orders", orderHandler.CreateOrder)
+	mux.HandleFunc("GET /api/v1/orders", orderHandler.GetOrder)
 
 	// Attach middleware chain
 	return loggingMiddleware(mux)

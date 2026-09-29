@@ -1,23 +1,32 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
 
-	myNats "nae/infra/nats"
+	"nae/infra/cache"
+	"nae/infra/db"
+	myNats "nae/infra/mq"
+	"nae/internal/domain"
 )
 
 type OrderHandler struct {
+	db        *db.PostgresRepo
+	cache     *cache.RedisCache
 	publisher *myNats.Publisher
 }
 
-func NewOrderHandler(pub *myNats.Publisher) *OrderHandler {
-	return &OrderHandler{publisher: pub}
+func NewOrderHandler(db *db.PostgresRepo, cache *cache.RedisCache, pub *myNats.Publisher) *OrderHandler {
+	return &OrderHandler{
+		db:        db,
+		cache:     cache,
+		publisher: pub,
+	}
 }
 
-// Request payload definition
 type CreateOrderRequest struct {
 	OrderID  string  `json:"order_id"`
 	UserID   string  `json:"user_id"`
@@ -25,62 +34,90 @@ type CreateOrderRequest struct {
 	Currency string  `json:"currency"`
 }
 
-// Response payload definition
-type CreateOrderResponse struct {
-	Status    string `json:"status"`
-	OrderID   string `json:"order_id"`
-	StreamSeq uint64 `json:"stream_sequence"`
-}
-
 func (h *OrderHandler) CreateOrder(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	var req CreateOrderRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("Invalid request body: %v", err), http.StatusBadRequest)
+		http.Error(w, "Invalid body", http.StatusBadRequest)
 		return
 	}
 
-	// 1. Serialize payload for NATS
-	payload, err := json.Marshal(req)
-	if err != nil {
-		http.Error(w, "Failed to serialize event", http.StatusInternalServerError)
+	order := &domain.Order{
+		ID:        req.OrderID,
+		UserID:    req.UserID,
+		Amount:    req.Amount,
+		Currency:  req.Currency,
+		Status:    "CREATED",
+		CreatedAt: time.Now().UTC(),
+	}
+
+	// 1. Write to PostgreSQL DB
+	if err := h.db.CreateOrder(r.Context(), order); err != nil {
+		http.Error(w, fmt.Sprintf("DB Write Error: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	// 2. Extract or generate metadata headers
+	// 2. Cache in Redis (Cache-Aside pattern)
+	_ = h.cache.SetOrder(r.Context(), order, 10*time.Minute)
+
+	// 3. Publish Event to NATS JetStream
+	payload, _ := json.Marshal(order)
 	traceID := r.Header.Get("X-Trace-ID")
 	if traceID == "" {
-		traceID = fmt.Sprintf("tr_%d", time.Now().UnixNano()) // fallback trace ID generator
+		traceID = fmt.Sprintf("tr_%d", time.Now().UnixNano())
 	}
 
-	event := myNats.Event{
+	ack, err := h.publisher.Publish(r.Context(), myNats.Event{
 		Subject: "ORDERS.created",
 		Payload: payload,
 		Headers: map[string]string{
-			"X-Trace-ID":   traceID,
-			"X-User-ID":    req.UserID,
-			"User-Agent":   r.UserAgent(),
-			"Content-Type": "application/json",
+			"X-Trace-ID": traceID,
+			"X-User-ID":  order.UserID,
 		},
+	})
+	if err != nil {
+		// Log warning: Record was saved to DB, but message queue publish failed
+		fmt.Printf("[Warning] Event publish failed: %v\n", err)
 	}
 
-	// 3. Publish to NATS JetStream synchronously during request execution
-	ack, err := h.publisher.Publish(r.Context(), event)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to publish event: %v", err), http.StatusInternalServerError)
+	// 4. Respond
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"status":          "SUCCESS",
+		"order":           order,
+		"stream_sequence": ack.Sequence,
+	})
+}
+
+func (h *OrderHandler) GetOrder(w http.ResponseWriter, r *http.Request) {
+	orderID := r.URL.Query().Get("id")
+	if orderID == "" {
+		http.Error(w, "Missing id query param", http.StatusBadRequest)
 		return
 	}
 
-	// 4. Return REST HTTP response with JetStream Ack Sequence
+	// 1. Try reading from Redis Cache
+	cachedOrder, err := h.cache.GetOrder(r.Context(), orderID)
+	if err == nil && cachedOrder != nil {
+		w.Header().Set("X-Cache", "HIT")
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(cachedOrder)
+		return
+	}
+
+	// 2. Cache Miss: Fall back to PostgreSQL DB
+	order, err := h.db.GetOrderByID(r.Context(), orderID)
+	if err != nil {
+		http.Error(w, "Order not found", http.StatusNotFound)
+		return
+	}
+
+	// 3. Populate Redis Cache asynchronously
+	go func() {
+		_ = h.cache.SetOrder(context.Background(), order, 10*time.Minute)
+	}()
+
+	w.Header().Set("X-Cache", "MISS")
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(CreateOrderResponse{
-		Status:    "ORDER_RECEIVED",
-		OrderID:   req.OrderID,
-		StreamSeq: ack.Sequence,
-	})
+	_ = json.NewEncoder(w).Encode(order)
 }
