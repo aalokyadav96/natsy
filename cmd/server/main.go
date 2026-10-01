@@ -9,26 +9,12 @@ import (
 	"syscall"
 	"time"
 
-	"nae/internal/shared/infra/cache"
-	"nae/internal/shared/infra/db"
-	"nae/internal/shared/infra/mq"
-
-	// Listing Module
-	listingRepo "nae/internal/modules/listing/adapter/repository"
-	listingHTTP "nae/internal/modules/listing/port/http"
-	listingUC "nae/internal/modules/listing/usecase"
-
-	// Cart Module
-	cartRepo "nae/internal/modules/cart/adapter/repository"
-	cartHTTP "nae/internal/modules/cart/port/http"
-	cartUC "nae/internal/modules/cart/usecase"
-
-	// Checkout Module
-	checkoutHTTP "nae/internal/modules/checkout/port/http"
-	checkoutUC "nae/internal/modules/checkout/usecase"
-
-	// Invoice Module
-	invoiceEvent "nae/internal/modules/invoice/port/event"
+	"nae/internal/app"
+	"nae/internal/modules/cart"
+	"nae/internal/modules/checkout"
+	"nae/internal/modules/invoice"
+	"nae/internal/modules/listing"
+	"nae/internal/shared/infra"
 )
 
 func main() {
@@ -38,71 +24,33 @@ func main() {
 	// -------------------------------------------------------------------------
 	// 1. Shared Infrastructure Setup
 	// -------------------------------------------------------------------------
-	pgClient, err := db.NewPostgresClient(
-		ctx,
-		getEnv("POSTGRES_URL", "postgres://apeman:ningning@localhost:5432/eventdb?sslmode=disable"),
-	)
+	cfg := infra.LoadConfig()
+	clients, err := infra.NewClients(ctx, cfg)
 	if err != nil {
-		log.Fatalf("Postgres connection failed: %v", err)
+		log.Fatalf("Infrastructure initialization failed: %v", err)
 	}
-	defer pgClient.Close()
-
-	redisClient, err := cache.NewRedisClient(
-		getEnv("REDIS_URL", "redis://localhost:6379/0"),
-	)
-	if err != nil {
-		log.Fatalf("Redis connection failed: %v", err)
-	}
-	defer redisClient.Close()
-
-	natsClient, err := mq.NewNATSClient(
-		getEnv("NATS_URL", "nats://localhost:4222"),
-	)
-	if err != nil {
-		log.Fatalf("NATS connection failed: %v", err)
-	}
-	defer natsClient.Close()
-
-	if err := natsClient.EnsureStream(ctx, "ORDERS", []string{"ORDERS.*"}); err != nil {
-		log.Fatalf("NATS stream creation failed: %v", err)
-	}
+	defer clients.Close()
 
 	// -------------------------------------------------------------------------
-	// 2. Module Wireups
+	// 2. Module registration via self-contained composition roots
 	// -------------------------------------------------------------------------
-
-	// A. Listing Module
-	lRepo := listingRepo.NewPostgresProductRepository(pgClient.Pool)
-	lUC := listingUC.NewListingUseCase(lRepo)
-	listingHandler := listingHTTP.NewListingHandler(lUC)
-
-	// B. Cart Module
-	cRepo := cartRepo.NewRedisCartRepository(redisClient.Client, 24*time.Hour)
-	cUC := cartUC.NewCartUseCase(cRepo)
-	cartHandler := cartHTTP.NewCartHandler(cUC)
-
-	// C. Checkout Module
-	coUC := checkoutUC.NewCheckoutUseCase(cRepo, natsClient)
-	checkoutHandler := checkoutHTTP.NewCheckoutHandler(coUC)
-
-	// D. Invoice Module (Background Event Consumer)
-	invoiceConsumer := invoiceEvent.NewInvoiceConsumer(natsClient)
-	if err := invoiceConsumer.Start(ctx); err != nil {
-		log.Fatalf("Failed to start invoice consumer: %v", err)
+	moduleContainer := app.NewContainer()
+	if err := moduleContainer.RegisterModules(
+		listing.NewModule(clients.Postgres.Pool),
+		cart.NewModule(clients.Redis.Client, 24*time.Hour),
+		checkout.NewModule(clients.Redis.Client, clients.NATS),
+		invoice.NewModule(clients.NATS),
+	); err != nil {
+		log.Fatalf("Module registration failed: %v", err)
 	}
 
-	// -------------------------------------------------------------------------
-	// 3. HTTP Router Registration
-	// -------------------------------------------------------------------------
-	mux := http.NewServeMux()
-
-	listingHandler.RegisterRoutes(mux)
-	cartHandler.RegisterRoutes(mux)
-	checkoutHandler.RegisterRoutes(mux)
+	if err := moduleContainer.Start(ctx); err != nil {
+		log.Fatalf("Module startup failed: %v", err)
+	}
 
 	server := &http.Server{
-		Addr:         ":4000",
-		Handler:      mux,
+		Addr:         cfg.HTTPAddr,
+		Handler:      moduleContainer.Mux(),
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 10 * time.Second,
 	}
@@ -128,11 +76,4 @@ func main() {
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Printf("HTTP Shutdown Error: %v", err)
 	}
-}
-
-func getEnv(key, fallback string) string {
-	if value, ok := os.LookupEnv(key); ok {
-		return value
-	}
-	return fallback
 }
