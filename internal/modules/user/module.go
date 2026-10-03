@@ -2,6 +2,7 @@ package user
 
 import (
 	"nae/internal/app"
+	userRepo "nae/internal/modules/user/adapter/repository"
 	userHTTP "nae/internal/modules/user/port/http"
 	userUC "nae/internal/modules/user/usecase"
 )
@@ -11,7 +12,8 @@ type Module struct {
 }
 
 func NewModule() *Module {
-	return &Module{handler: userHTTP.NewUserHandler(userUC.NewUserUseCase(nil))}
+	repo := userRepo.NewInMemoryUserRepository()
+	return &Module{handler: userHTTP.NewUserHandler(userUC.NewUserUseCase(repo))}
 }
 
 func (m *Module) Name() string { return "user" }

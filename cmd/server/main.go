@@ -9,20 +9,7 @@ import (
 	"syscall"
 	"time"
 
-	"nae/internal/app"
-	"nae/internal/modules/audit"
-	"nae/internal/modules/cart"
-	"nae/internal/modules/catalog"
-	"nae/internal/modules/checkout"
-	"nae/internal/modules/coupon"
-	"nae/internal/modules/fulfillment"
-	"nae/internal/modules/inventory"
-	"nae/internal/modules/invoice"
-	"nae/internal/modules/listing"
-	"nae/internal/modules/notification"
-	"nae/internal/modules/order"
-	"nae/internal/modules/payment"
-	"nae/internal/modules/user"
+	"nae/internal/bootstrap"
 	"nae/internal/shared/infra"
 )
 
@@ -41,25 +28,11 @@ func main() {
 	defer clients.Close()
 
 	// -------------------------------------------------------------------------
-	// 2. Module registration via self-contained composition roots
+	// 2. Module registration via composition root
 	// -------------------------------------------------------------------------
-	moduleContainer := app.NewContainer()
-	if err := moduleContainer.RegisterModules(
-		user.NewModule(),
-		catalog.NewModule(),
-		listing.NewModule(clients.Postgres.Pool),
-		inventory.NewModule(clients.Redis.Client),
-		cart.NewModule(clients.Redis.Client, 24*time.Hour),
-		coupon.NewModule(),
-		order.NewModule(clients.Postgres.Pool, clients.NATS),
-		payment.NewModule(clients.Postgres.Pool, clients.NATS),
-		fulfillment.NewModule(),
-		notification.NewModule(clients.NATS),
-		audit.NewModule(),
-		checkout.NewModule(clients.Redis.Client, clients.NATS),
-		invoice.NewModule(clients.NATS),
-	); err != nil {
-		log.Fatalf("Module registration failed: %v", err)
+	moduleContainer, err := bootstrap.NewContainer(clients)
+	if err != nil {
+		log.Fatalf("Module composition failed: %v", err)
 	}
 
 	if err := moduleContainer.Start(ctx); err != nil {

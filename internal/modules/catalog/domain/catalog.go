@@ -1,6 +1,9 @@
 package domain
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 type CatalogItem struct {
 	ID          string
@@ -8,4 +11,9 @@ type CatalogItem struct {
 	Description string
 	Price       float64
 	CreatedAt   time.Time
+}
+
+type CatalogRepository interface {
+	List(ctx context.Context) ([]*CatalogItem, error)
+	GetByID(ctx context.Context, id string) (*CatalogItem, error)
 }

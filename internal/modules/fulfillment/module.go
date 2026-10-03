@@ -2,6 +2,7 @@ package fulfillment
 
 import (
 	"nae/internal/app"
+	fulfillmentRepo "nae/internal/modules/fulfillment/adapter/repository"
 	fulfillmentHTTP "nae/internal/modules/fulfillment/port/http"
 	fulfillmentUC "nae/internal/modules/fulfillment/usecase"
 )
@@ -11,7 +12,8 @@ type Module struct {
 }
 
 func NewModule() *Module {
-	return &Module{handler: fulfillmentHTTP.NewFulfillmentHandler(fulfillmentUC.NewFulfillmentUseCase())}
+	repo := fulfillmentRepo.NewInMemoryFulfillmentRepository()
+	return &Module{handler: fulfillmentHTTP.NewFulfillmentHandler(fulfillmentUC.NewFulfillmentUseCase(repo))}
 }
 
 func (m *Module) Name() string { return "fulfillment" }

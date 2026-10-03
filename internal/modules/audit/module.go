@@ -2,6 +2,7 @@ package audit
 
 import (
 	"nae/internal/app"
+	auditRepo "nae/internal/modules/audit/adapter/repository"
 	auditHTTP "nae/internal/modules/audit/port/http"
 	auditUC "nae/internal/modules/audit/usecase"
 )
@@ -11,7 +12,8 @@ type Module struct {
 }
 
 func NewModule() *Module {
-	return &Module{handler: auditHTTP.NewAuditHandler(auditUC.NewAuditUseCase())}
+	repo := auditRepo.NewInMemoryAuditRepository()
+	return &Module{handler: auditHTTP.NewAuditHandler(auditUC.NewAuditUseCase(repo))}
 }
 
 func (m *Module) Name() string { return "audit" }

@@ -2,8 +2,10 @@ package usecase
 
 import (
 	"context"
+	"fmt"
 
 	"nae/internal/modules/catalog/domain"
+	sharedDomain "nae/internal/shared/domain"
 )
 
 type CatalogUseCase interface {
@@ -11,14 +13,27 @@ type CatalogUseCase interface {
 	GetItem(ctx context.Context, id string) (*domain.CatalogItem, error)
 }
 
-type catalogUseCase struct{}
+type catalogUseCase struct {
+	repo domain.CatalogRepository
+}
 
-func NewCatalogUseCase() CatalogUseCase { return &catalogUseCase{} }
+func NewCatalogUseCase(repo domain.CatalogRepository) CatalogUseCase {
+	return &catalogUseCase{repo: repo}
+}
 
 func (u *catalogUseCase) ListItems(ctx context.Context) ([]*domain.CatalogItem, error) {
-	return []*domain.CatalogItem{}, nil
+	if u.repo == nil {
+		return nil, fmt.Errorf("%w: catalog repository is not configured", sharedDomain.ErrInternalError)
+	}
+	return u.repo.List(ctx)
 }
 
 func (u *catalogUseCase) GetItem(ctx context.Context, id string) (*domain.CatalogItem, error) {
-	return &domain.CatalogItem{ID: id, Name: "placeholder"}, nil
+	if id == "" {
+		return nil, fmt.Errorf("%w: catalog item id is required", sharedDomain.ErrInvalidInput)
+	}
+	if u.repo == nil {
+		return nil, fmt.Errorf("%w: catalog repository is not configured", sharedDomain.ErrInternalError)
+	}
+	return u.repo.GetByID(ctx, id)
 }

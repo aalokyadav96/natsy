@@ -2,6 +2,7 @@ package coupon
 
 import (
 	"nae/internal/app"
+	couponRepo "nae/internal/modules/coupon/adapter/repository"
 	couponHTTP "nae/internal/modules/coupon/port/http"
 	couponUC "nae/internal/modules/coupon/usecase"
 )
@@ -11,7 +12,8 @@ type Module struct {
 }
 
 func NewModule() *Module {
-	return &Module{handler: couponHTTP.NewCouponHandler(couponUC.NewCouponUseCase())}
+	repo := couponRepo.NewInMemoryCouponRepository()
+	return &Module{handler: couponHTTP.NewCouponHandler(couponUC.NewCouponUseCase(repo))}
 }
 
 func (m *Module) Name() string { return "coupon" }

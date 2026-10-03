@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"nae/internal/app"
+	catalogRepo "nae/internal/modules/catalog/adapter/repository"
 	catalogHTTP "nae/internal/modules/catalog/port/http"
 	catalogUC "nae/internal/modules/catalog/usecase"
 )
@@ -11,7 +12,8 @@ type Module struct {
 }
 
 func NewModule() *Module {
-	return &Module{handler: catalogHTTP.NewCatalogHandler(catalogUC.NewCatalogUseCase())}
+	repo := catalogRepo.NewInMemoryCatalogRepository()
+	return &Module{handler: catalogHTTP.NewCatalogHandler(catalogUC.NewCatalogUseCase(repo))}
 }
 
 func (m *Module) Name() string { return "catalog" }
