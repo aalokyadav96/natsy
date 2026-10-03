@@ -6,6 +6,8 @@ import (
 	"fmt"
 
 	cartDomain "nae/internal/modules/cart/domain"
+	inventoryDomain "nae/internal/modules/inventory/domain"
+	orderDomain "nae/internal/modules/order/domain"
 	"nae/internal/shared/infra/mq"
 )
 
@@ -14,12 +16,13 @@ type CheckoutUseCase interface {
 }
 
 type checkoutUseCase struct {
-	cartRepo cartDomain.CartRepository
-	nats     *mq.NATSClient
+	cartRepo      cartDomain.CartRepository
+	inventoryRepo inventoryDomain.InventoryRepository
+	nats          *mq.NATSClient
 }
 
-func NewCheckoutUseCase(cartRepo cartDomain.CartRepository, nats *mq.NATSClient) CheckoutUseCase {
-	return &checkoutUseCase{cartRepo: cartRepo, nats: nats}
+func NewCheckoutUseCase(cartRepo cartDomain.CartRepository, inventoryRepo inventoryDomain.InventoryRepository, nats *mq.NATSClient) CheckoutUseCase {
+	return &checkoutUseCase{cartRepo: cartRepo, inventoryRepo: inventoryRepo, nats: nats}
 }
 
 type OrderCreatedEvent struct {
@@ -27,6 +30,7 @@ type OrderCreatedEvent struct {
 	UserID  string                `json:"user_id"`
 	Items   []cartDomain.CartItem `json:"items"`
 	Total   float64               `json:"total"`
+	Status  string                `json:"status"`
 }
 
 func (u *checkoutUseCase) ProcessCheckout(ctx context.Context, userID string) (string, error) {
@@ -38,21 +42,29 @@ func (u *checkoutUseCase) ProcessCheckout(ctx context.Context, userID string) (s
 	var total float64
 	for _, item := range cart.Items {
 		total += item.UnitPrice * float64(item.Quantity)
+		if u.inventoryRepo != nil {
+			if err := u.inventoryRepo.Reserve(ctx, item.ProductID, item.Quantity); err != nil {
+				return "", fmt.Errorf("reserve inventory for %s: %w", item.ProductID, err)
+			}
+		}
 	}
 
-	orderID := fmt.Sprintf("ord_%s", userID)
+	orderID := orderDomain.NewOrderID(userID)
 
 	evt := OrderCreatedEvent{
 		OrderID: orderID,
 		UserID:  userID,
 		Items:   cart.Items,
 		Total:   total,
+		Status:  orderDomain.StatusReserved,
 	}
 
 	payload, _ := json.Marshal(evt)
-	_, err = u.nats.JS.Publish(ctx, "ORDERS.created", payload)
-	if err != nil {
-		return "", fmt.Errorf("failed to emit event: %w", err)
+	if u.nats != nil {
+		_, err = u.nats.JS.Publish(ctx, "ORDERS.created", payload)
+		if err != nil {
+			return "", fmt.Errorf("failed to emit event: %w", err)
+		}
 	}
 
 	_ = u.cartRepo.ClearCart(ctx, userID)

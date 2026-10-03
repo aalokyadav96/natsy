@@ -41,6 +41,17 @@ func (c *InvoiceConsumer) Start(ctx context.Context) error {
 		}
 
 		log.Printf("[Invoice Module] Generating invoice for Order ID: %s, User: %s, Total: $%.2f", evt.OrderID, evt.UserID, evt.Total)
+		if c.nats != nil {
+			payload, marshalErr := json.Marshal(map[string]any{
+				"order_id": evt.OrderID,
+				"user_id":  evt.UserID,
+				"total":    evt.Total,
+				"status":   "issued",
+			})
+			if marshalErr == nil {
+				_, _ = c.nats.JS.Publish(ctx, "INVOICES.created", payload)
+			}
+		}
 		_ = msg.Ack()
 	})
 

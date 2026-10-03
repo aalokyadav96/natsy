@@ -9,6 +9,7 @@ import (
 type InventoryUseCase interface {
 	GetInventory(ctx context.Context, productID string) (*domain.InventoryItem, error)
 	Reserve(ctx context.Context, productID string, quantity int) error
+	Release(ctx context.Context, productID string, quantity int) error
 }
 
 type inventoryUseCase struct {
@@ -25,4 +26,8 @@ func (u *inventoryUseCase) GetInventory(ctx context.Context, productID string) (
 
 func (u *inventoryUseCase) Reserve(ctx context.Context, productID string, quantity int) error {
 	return u.repo.Reserve(ctx, productID, quantity)
+}
+
+func (u *inventoryUseCase) Release(ctx context.Context, productID string, quantity int) error {
+	return u.repo.Release(ctx, productID, quantity)
 }

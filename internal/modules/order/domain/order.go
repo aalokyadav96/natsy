@@ -2,6 +2,7 @@ package domain
 
 import (
 	"context"
+	"fmt"
 	"time"
 )
 
@@ -11,6 +12,16 @@ type OrderItem struct {
 	UnitPrice float64 `json:"unit_price"`
 }
 
+const (
+	StatusCreated   = "created"
+	StatusValidated = "validated"
+	StatusReserved  = "reserved"
+	StatusPaid      = "paid"
+	StatusFulfilled = "fulfilled"
+	StatusCompleted = "completed"
+	StatusCancelled = "cancelled"
+)
+
 type Order struct {
 	ID        string      `json:"id"`
 	UserID    string      `json:"user_id"`
@@ -18,6 +29,13 @@ type Order struct {
 	Total     float64     `json:"total"`
 	Status    string      `json:"status"`
 	CreatedAt time.Time   `json:"created_at"`
+}
+
+func NewOrderID(userID string) string {
+	if userID == "" {
+		return fmt.Sprintf("ord_%d", time.Now().UnixNano())
+	}
+	return fmt.Sprintf("ord_%s_%d", userID, time.Now().UnixNano())
 }
 
 type OrderRepository interface {

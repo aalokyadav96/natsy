@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"nae/internal/app"
+	"nae/internal/modules/ap"
 	"nae/internal/modules/audit"
 	"nae/internal/modules/cart"
 	"nae/internal/modules/catalog"
@@ -17,6 +18,7 @@ import (
 	"nae/internal/modules/notification"
 	"nae/internal/modules/order"
 	"nae/internal/modules/payment"
+	"nae/internal/modules/procurement"
 	"nae/internal/modules/user"
 	"nae/internal/shared/infra"
 	"nae/internal/shared/infra/mq"
@@ -49,12 +51,14 @@ func BuildModules(clients *infra.Clients) ([]app.Module, error) {
 		user.NewModule(),
 		catalog.NewModule(),
 		listing.NewModule(pgPool),
-		inventory.NewModule(redisClient),
+		inventory.NewModule(redisClient, natsClient),
 		cart.NewModule(redisClient, 24*time.Hour),
 		coupon.NewModule(),
+		procurement.NewModule(),
+		ap.NewModule(natsClient),
 		order.NewModule(pgPool, natsClient),
 		payment.NewModule(pgPool, natsClient),
-		fulfillment.NewModule(),
+		fulfillment.NewModule(natsClient),
 		notification.NewModule(natsClient),
 		audit.NewModule(),
 		checkout.NewModule(redisClient, natsClient),

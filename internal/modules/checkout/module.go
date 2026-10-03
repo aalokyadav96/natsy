@@ -7,6 +7,7 @@ import (
 	cartRepo "nae/internal/modules/cart/adapter/repository"
 	checkoutHTTP "nae/internal/modules/checkout/port/http"
 	checkoutUC "nae/internal/modules/checkout/usecase"
+	inventoryRepo "nae/internal/modules/inventory/adapter/repository"
 	"nae/internal/shared/infra/mq"
 
 	"github.com/redis/go-redis/v9"
@@ -17,8 +18,9 @@ type Module struct {
 }
 
 func NewModule(client *redis.Client, nats *mq.NATSClient) *Module {
-	repo := cartRepo.NewRedisCartRepository(client, 24*time.Hour)
-	uc := checkoutUC.NewCheckoutUseCase(repo, nats)
+	cartRepo := cartRepo.NewRedisCartRepository(client, 24*time.Hour)
+	inventoryRepo := inventoryRepo.NewRedisInventoryRepository(client)
+	uc := checkoutUC.NewCheckoutUseCase(cartRepo, inventoryRepo, nats)
 	return &Module{handler: checkoutHTTP.NewCheckoutHandler(uc)}
 }
 

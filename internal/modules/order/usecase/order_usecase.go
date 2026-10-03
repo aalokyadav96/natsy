@@ -44,11 +44,11 @@ func (u *orderUseCase) Create(ctx context.Context, userID string, items []domain
 	}
 
 	order := &domain.Order{
-		ID:        fmt.Sprintf("ord_%s_%d", userID, time.Now().UnixNano()),
+		ID:        domain.NewOrderID(userID),
 		UserID:    userID,
 		Items:     items,
 		Total:     total,
-		Status:    "created",
+		Status:    domain.StatusCreated,
 		CreatedAt: time.Now().UTC(),
 	}
 
@@ -62,6 +62,7 @@ func (u *orderUseCase) Create(ctx context.Context, userID string, items []domain
 			"user_id":  order.UserID,
 			"total":    order.Total,
 			"items":    order.Items,
+			"status":   order.Status,
 		})
 		if err == nil {
 			_, _ = u.nats.JS.Publish(ctx, "ORDERS.created", payload)
